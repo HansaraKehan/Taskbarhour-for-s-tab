@@ -255,7 +255,7 @@ jobs:
                       setPadding(pad, pad, pad, pad)
                   }
 
-                  val text = TextView(this).apply {
+                  val label = TextView(this).apply {
                       textSize = 16f
                       gravity = Gravity.CENTER
                       text = "Turn on \"Taskbar Hover\" in Accessibility settings.\n\n" +
@@ -270,7 +270,7 @@ jobs:
                       }
                   }
 
-                  root.addView(text)
+                  root.addView(label)
                   root.addView(button)
                   setContentView(root)
               }
