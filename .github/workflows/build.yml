@@ -58,9 +58,19 @@ jobs:
                   versionName = "1.0"
               }
 
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("release.keystore")
+                      storePassword = "taskbar123"
+                      keyAlias = "taskbar"
+                      keyPassword = "taskbar123"
+                  }
+              }
+
               buildTypes {
                   release {
                       isMinifyEnabled = false
+                      signingConfig = signingConfigs.getByName("release")
                   }
               }
               compileOptions {
@@ -205,14 +215,18 @@ jobs:
                   val now = SystemClock.uptimeMillis()
                   if (now - lastTrigger < 1500) return
                   lastTrigger = now
+                  val prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                  val distDp = prefs.getInt("distance_dp", 50)
+                  val distPx = distDp * resources.displayMetrics.density
                   val b = wm.currentWindowMetrics.bounds
                   val x = b.width() / 2f
+                  val startY = b.height() - 2f
                   val path = Path().apply {
-                      moveTo(x, b.height() - 2f)
-                      lineTo(x, b.height() - 350f)
+                      moveTo(x, startY)
+                      lineTo(x, (startY - distPx).coerceAtLeast(0f))
                   }
                   val g = GestureDescription.Builder()
-                      .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
+                      .addStroke(GestureDescription.StrokeDescription(path, 0, 250))
                       .build()
                   dispatchGesture(g, null, null)
               }
@@ -239,15 +253,19 @@ jobs:
           import android.content.Intent
           import android.os.Bundle
           import android.provider.Settings
+          import android.text.InputType
           import android.view.Gravity
           import android.widget.Button
+          import android.widget.EditText
           import android.widget.LinearLayout
           import android.widget.TextView
+          import android.widget.Toast
 
           class MainActivity : Activity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
+                  val prefs = getSharedPreferences("settings", MODE_PRIVATE)
                   val pad = (24 * resources.displayMetrics.density).toInt()
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -255,27 +273,58 @@ jobs:
                       setPadding(pad, pad, pad, pad)
                   }
 
-                  val label = TextView(this).apply {
+                  val intro = TextView(this).apply {
                       textSize = 16f
                       gravity = Gravity.CENTER
                       text = "Turn on \"Taskbar Hover\" in Accessibility settings.\n\n" +
-                          "Once it is on, it runs by itself. While a mouse is connected, " +
-                          "moving the pointer to the bottom edge of the screen brings up the auto-hidden taskbar."
+                          "While a mouse is connected, moving the pointer to the bottom edge " +
+                          "of the screen brings up the auto-hidden taskbar."
                   }
 
-                  val button = Button(this).apply {
+                  val openSettings = Button(this).apply {
                       text = "Open Accessibility settings"
                       setOnClickListener {
                           startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                       }
                   }
 
-                  root.addView(label)
-                  root.addView(button)
+                  val distLabel = TextView(this).apply {
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      setPadding(0, pad, 0, 0)
+                      text = "Swipe distance (dp, 5 to 400).\n" +
+                          "Lower it if apps get the Home gesture. Raise it if the taskbar does not appear."
+                  }
+
+                  val distInput = EditText(this).apply {
+                      inputType = InputType.TYPE_CLASS_NUMBER
+                      gravity = Gravity.CENTER
+                      setText(prefs.getInt("distance_dp", 50).toString())
+                  }
+
+                  val save = Button(this).apply {
+                      text = "Save"
+                      setOnClickListener {
+                          val v = distInput.text.toString().trim().toIntOrNull()
+                          if (v == null || v < 5 || v > 400) {
+                              Toast.makeText(this@MainActivity, "Enter a number from 5 to 400", Toast.LENGTH_SHORT).show()
+                          } else {
+                              prefs.edit().putInt("distance_dp", v).apply()
+                              Toast.makeText(this@MainActivity, "Saved: $v dp", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }
+
+                  root.addView(intro)
+                  root.addView(openSettings)
+                  root.addView(distLabel)
+                  root.addView(distInput)
+                  root.addView(save)
                   setContentView(root)
               }
           }
           EOF_FILE
+          echo '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' | base64 -d > app/release.keystore
 
       - uses: actions/setup-java@v4
         with:
@@ -289,10 +338,10 @@ jobs:
         with:
           gradle-version: 8.9
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Build signed release APK
+        run: gradle :app:assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
           name: TaskbarHover-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/release/app-release.apk
