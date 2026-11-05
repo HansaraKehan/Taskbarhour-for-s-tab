@@ -1,0 +1,297 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create project files
+        run: |
+          cat > settings.gradle.kts <<'EOF_FILE'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "TaskbarHover"
+          include(":app")
+          EOF_FILE
+          cat > build.gradle.kts <<'EOF_FILE'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF_FILE
+          cat > gradle.properties <<'EOF_FILE'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF_FILE
+          mkdir -p app
+          cat > app/build.gradle.kts <<'EOF_FILE'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.taskbarhover"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.taskbarhover"
+                  minSdk = 30
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF_FILE
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@android:style/Theme.Material.Light">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".HoverService"
+                      android:exported="false"
+                      android:label="@string/app_name"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF_FILE
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/accessibility_config.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canPerformGestures="true"
+              android:description="@string/service_desc"
+              android:notificationTimeout="100" />
+          EOF_FILE
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/strings.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Taskbar Hover</string>
+              <string name="service_desc">While a mouse is connected, shows the auto-hidden taskbar when the pointer touches the bottom edge of the screen.</string>
+          </resources>
+          EOF_FILE
+          mkdir -p app/src/main/java/com/example/taskbarhover
+          cat > app/src/main/java/com/example/taskbarhover/HoverService.kt <<'EOF_FILE'
+          package com.example.taskbarhover
+
+          import android.accessibilityservice.AccessibilityService
+          import android.accessibilityservice.GestureDescription
+          import android.graphics.Color
+          import android.graphics.Path
+          import android.graphics.PixelFormat
+          import android.hardware.input.InputManager
+          import android.os.SystemClock
+          import android.view.Gravity
+          import android.view.InputDevice
+          import android.view.MotionEvent
+          import android.view.View
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+
+          /**
+           * Shows an invisible thin strip along the bottom edge while a mouse is connected.
+           * When the mouse pointer enters the strip, it performs a short swipe-up from the
+           * bottom edge, which makes the auto-hidden taskbar appear.
+           */
+          class HoverService : AccessibilityService(), InputManager.InputDeviceListener {
+
+              private lateinit var wm: WindowManager
+              private lateinit var im: InputManager
+              private var strip: View? = null
+              private var lastTrigger = 0L
+
+              override fun onServiceConnected() {
+                  wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  im = getSystemService(INPUT_SERVICE) as InputManager
+                  im.registerInputDeviceListener(this, null)
+                  refresh()
+              }
+
+              private fun mouseConnected(): Boolean = InputDevice.getDeviceIds().any { id ->
+                  val d = InputDevice.getDevice(id)
+                  d != null && !d.isVirtual &&
+                      (d.sources and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+              }
+
+              private fun refresh() {
+                  if (mouseConnected()) addStrip() else removeStrip()
+              }
+
+              private fun addStrip() {
+                  if (strip != null) return
+                  val v = View(this)
+                  v.setBackgroundColor(Color.TRANSPARENT)
+                  v.setOnHoverListener { _, e ->
+                      if (e.actionMasked == MotionEvent.ACTION_HOVER_ENTER ||
+                          e.actionMasked == MotionEvent.ACTION_HOVER_MOVE
+                      ) trigger()
+                      false
+                  }
+                  val lp = WindowManager.LayoutParams(
+                      WindowManager.LayoutParams.MATCH_PARENT,
+                      (4 * resources.displayMetrics.density).toInt().coerceAtLeast(3),
+                      WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                          WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                          WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                      PixelFormat.TRANSLUCENT
+                  )
+                  lp.gravity = Gravity.BOTTOM
+                  wm.addView(v, lp)
+                  strip = v
+              }
+
+              private fun removeStrip() {
+                  strip?.let { runCatching { wm.removeView(it) } }
+                  strip = null
+              }
+
+              private fun trigger() {
+                  val now = SystemClock.uptimeMillis()
+                  if (now - lastTrigger < 1500) return
+                  lastTrigger = now
+                  val b = wm.currentWindowMetrics.bounds
+                  val x = b.width() / 2f
+                  val path = Path().apply {
+                      moveTo(x, b.height() - 2f)
+                      lineTo(x, b.height() - 350f)
+                  }
+                  val g = GestureDescription.Builder()
+                      .addStroke(GestureDescription.StrokeDescription(path, 0, 120))
+                      .build()
+                  dispatchGesture(g, null, null)
+              }
+
+              override fun onInputDeviceAdded(deviceId: Int) = refresh()
+              override fun onInputDeviceRemoved(deviceId: Int) = refresh()
+              override fun onInputDeviceChanged(deviceId: Int) = refresh()
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() {}
+
+              override fun onDestroy() {
+                  runCatching { im.unregisterInputDeviceListener(this) }
+                  removeStrip()
+                  super.onDestroy()
+              }
+          }
+          EOF_FILE
+          mkdir -p app/src/main/java/com/example/taskbarhover
+          cat > app/src/main/java/com/example/taskbarhover/MainActivity.kt <<'EOF_FILE'
+          package com.example.taskbarhover
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val pad = (24 * resources.displayMetrics.density).toInt()
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(pad, pad, pad, pad)
+                  }
+
+                  val text = TextView(this).apply {
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      text = "Turn on \"Taskbar Hover\" in Accessibility settings.\n\n" +
+                          "Once it is on, it runs by itself. While a mouse is connected, " +
+                          "moving the pointer to the bottom edge of the screen brings up the auto-hidden taskbar."
+                  }
+
+                  val button = Button(this).apply {
+                      text = "Open Accessibility settings"
+                      setOnClickListener {
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      }
+                  }
+
+                  root.addView(text)
+                  root.addView(button)
+                  setContentView(root)
+              }
+          }
+          EOF_FILE
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TaskbarHover-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
