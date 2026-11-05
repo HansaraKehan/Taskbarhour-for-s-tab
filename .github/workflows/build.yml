@@ -125,11 +125,9 @@ jobs:
           cat > app/src/main/res/xml/accessibility_config.xml <<'EOF_FILE'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:canPerformGestures="true"
-              android:description="@string/service_desc"
-              android:notificationTimeout="100" />
+              android:description="@string/service_desc" />
           EOF_FILE
           mkdir -p app/src/main/res/values
           cat > app/src/main/res/values/strings.xml <<'EOF_FILE'
@@ -185,6 +183,7 @@ jobs:
 
           import android.accessibilityservice.AccessibilityService
           import android.accessibilityservice.GestureDescription
+          import android.content.SharedPreferences
           import android.graphics.Color
           import android.graphics.Path
           import android.graphics.PixelFormat
@@ -208,8 +207,16 @@ jobs:
               private lateinit var im: InputManager
               private var strip: View? = null
               private var lastTrigger = 0L
+              private var distanceDp = 50
+              private lateinit var prefs: SharedPreferences
+              private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+                  if (key == "distance_dp") distanceDp = p.getInt("distance_dp", 50)
+              }
 
               override fun onServiceConnected() {
+                  prefs = getSharedPreferences("settings", MODE_PRIVATE)
+                  distanceDp = prefs.getInt("distance_dp", 50)
+                  prefs.registerOnSharedPreferenceChangeListener(prefListener)
                   wm = getSystemService(WINDOW_SERVICE) as WindowManager
                   im = getSystemService(INPUT_SERVICE) as InputManager
                   im.registerInputDeviceListener(this, null)
@@ -260,9 +267,7 @@ jobs:
                   val now = SystemClock.uptimeMillis()
                   if (now - lastTrigger < 1500) return
                   lastTrigger = now
-                  val prefs = getSharedPreferences("settings", MODE_PRIVATE)
-                  val distDp = prefs.getInt("distance_dp", 50)
-                  val distPx = distDp * resources.displayMetrics.density
+                  val distPx = distanceDp * resources.displayMetrics.density
                   val b = wm.currentWindowMetrics.bounds
                   val x = b.width() / 2f
                   val startY = b.height() - 2f
@@ -285,6 +290,7 @@ jobs:
 
               override fun onDestroy() {
                   runCatching { im.unregisterInputDeviceListener(this) }
+                  runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefListener) }
                   removeStrip()
                   super.onDestroy()
               }
