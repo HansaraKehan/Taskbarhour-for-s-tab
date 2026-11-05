@@ -90,6 +90,13 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.HOME" />
+                  </intent>
+              </queries>
+
               <application
                   android:allowBackup="false"
                   android:icon="@mipmap/ic_launcher"
@@ -99,7 +106,8 @@ jobs:
 
                   <activity
                       android:name=".MainActivity"
-                      android:exported="true">
+                      android:exported="true"
+                      android:theme="@android:style/Theme.Translucent.NoTitleBar">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -127,6 +135,7 @@ jobs:
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:canPerformGestures="true"
+              android:canRetrieveWindowContent="true"
               android:description="@string/service_desc" />
           EOF_FILE
           mkdir -p app/src/main/res/values
@@ -183,7 +192,8 @@ jobs:
 
           import android.accessibilityservice.AccessibilityService
           import android.accessibilityservice.GestureDescription
-          import android.content.SharedPreferences
+          import android.content.Intent
+          import android.content.pm.PackageManager
           import android.graphics.Color
           import android.graphics.Path
           import android.graphics.PixelFormat
@@ -207,16 +217,9 @@ jobs:
               private lateinit var im: InputManager
               private var strip: View? = null
               private var lastTrigger = 0L
-              private var distanceDp = 50
-              private lateinit var prefs: SharedPreferences
-              private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
-                  if (key == "distance_dp") distanceDp = p.getInt("distance_dp", 50)
-              }
+              private val swipeDp = 50
 
               override fun onServiceConnected() {
-                  prefs = getSharedPreferences("settings", MODE_PRIVATE)
-                  distanceDp = prefs.getInt("distance_dp", 50)
-                  prefs.registerOnSharedPreferenceChangeListener(prefListener)
                   wm = getSystemService(WINDOW_SERVICE) as WindowManager
                   im = getSystemService(INPUT_SERVICE) as InputManager
                   im.registerInputDeviceListener(this, null)
@@ -263,11 +266,21 @@ jobs:
                   strip = null
               }
 
+              private fun onHomeScreen(): Boolean {
+                  val current = rootInActiveWindow?.packageName?.toString() ?: return false
+                  val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                  val launcher = packageManager
+                      .resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY)
+                      ?.activityInfo?.packageName
+                  return current == launcher
+              }
+
               private fun trigger() {
                   val now = SystemClock.uptimeMillis()
                   if (now - lastTrigger < 1500) return
                   lastTrigger = now
-                  val distPx = distanceDp * resources.displayMetrics.density
+                  if (onHomeScreen()) return
+                  val distPx = swipeDp * resources.displayMetrics.density
                   val b = wm.currentWindowMetrics.bounds
                   val x = b.width() / 2f
                   val startY = b.height() - 2f
@@ -290,7 +303,6 @@ jobs:
 
               override fun onDestroy() {
                   runCatching { im.unregisterInputDeviceListener(this) }
-                  runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefListener) }
                   removeStrip()
                   super.onDestroy()
               }
@@ -301,35 +313,47 @@ jobs:
           package com.example.taskbarhover
 
           import android.app.Activity
+          import android.content.ComponentName
           import android.content.Intent
+          import android.graphics.Color
           import android.os.Bundle
           import android.provider.Settings
-          import android.text.InputType
           import android.view.Gravity
           import android.widget.Button
-          import android.widget.EditText
           import android.widget.LinearLayout
           import android.widget.TextView
-          import android.widget.Toast
 
           class MainActivity : Activity() {
+
+              private fun serviceEnabled(): Boolean {
+                  val me = ComponentName(this, HoverService::class.java)
+                  val list = Settings.Secure.getString(
+                      contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                  ) ?: return false
+                  return list.split(':').any { ComponentName.unflattenFromString(it) == me }
+              }
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
+                  if (serviceEnabled()) {
+                      finish()
+                      return
+                  }
 
-                  val prefs = getSharedPreferences("settings", MODE_PRIVATE)
                   val pad = (24 * resources.displayMetrics.density).toInt()
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
+                      setBackgroundColor(Color.WHITE)
                       setPadding(pad, pad, pad, pad)
                   }
 
                   val intro = TextView(this).apply {
                       textSize = 16f
                       gravity = Gravity.CENTER
+                      setTextColor(Color.BLACK)
                       text = "Turn on \"Taskbar Hover\" in Accessibility settings.\n\n" +
-                          "While a mouse is connected, moving the pointer to the bottom edge " +
-                          "of the screen brings up the auto-hidden taskbar."
+                          "After that it runs by itself and this screen will not appear again."
                   }
 
                   val openSettings = Button(this).apply {
@@ -339,39 +363,14 @@ jobs:
                       }
                   }
 
-                  val distLabel = TextView(this).apply {
-                      textSize = 16f
-                      gravity = Gravity.CENTER
-                      setPadding(0, pad, 0, 0)
-                      text = "Swipe distance (dp, 5 to 400).\n" +
-                          "Lower it if apps get the Home gesture. Raise it if the taskbar does not appear."
-                  }
-
-                  val distInput = EditText(this).apply {
-                      inputType = InputType.TYPE_CLASS_NUMBER
-                      gravity = Gravity.CENTER
-                      setText(prefs.getInt("distance_dp", 50).toString())
-                  }
-
-                  val save = Button(this).apply {
-                      text = "Save"
-                      setOnClickListener {
-                          val v = distInput.text.toString().trim().toIntOrNull()
-                          if (v == null || v < 5 || v > 400) {
-                              Toast.makeText(this@MainActivity, "Enter a number from 5 to 400", Toast.LENGTH_SHORT).show()
-                          } else {
-                              prefs.edit().putInt("distance_dp", v).apply()
-                              Toast.makeText(this@MainActivity, "Saved: $v dp", Toast.LENGTH_SHORT).show()
-                          }
-                      }
-                  }
-
                   root.addView(intro)
                   root.addView(openSettings)
-                  root.addView(distLabel)
-                  root.addView(distInput)
-                  root.addView(save)
                   setContentView(root)
+              }
+
+              override fun onResume() {
+                  super.onResume()
+                  if (serviceEnabled()) finish()
               }
           }
           EOF_FILE
