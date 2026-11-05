@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -89,6 +92,8 @@ jobs:
 
               <application
                   android:allowBackup="false"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
                   android:label="@string/app_name"
                   android:theme="@android:style/Theme.Material.Light">
 
@@ -133,6 +138,46 @@ jobs:
               <string name="app_name">Taskbar Hover</string>
               <string name="service_desc">While a mouse is connected, shows the auto-hidden taskbar when the pointer touches the bottom edge of the screen.</string>
           </resources>
+          EOF_FILE
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/colors.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_launcher_background">#1B2838</color>
+          </resources>
+          EOF_FILE
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background" />
+              <foreground android:drawable="@drawable/ic_launcher_foreground" />
+          </adaptive-icon>
+          EOF_FILE
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher_foreground.xml <<'EOF_FILE'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M32,64 L76,64 Q82,64 82,70 Q82,76 76,76 L32,76 Q26,76 26,70 Q26,64 32,64 Z" />
+              <path
+                  android:fillColor="#4FC3F7"
+                  android:pathData="M38,70 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+              <path
+                  android:fillColor="#4FC3F7"
+                  android:pathData="M54,70 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+              <path
+                  android:fillColor="#4FC3F7"
+                  android:pathData="M70,70 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+              <path
+                  android:fillColor="#4FC3F7"
+                  android:pathData="M46,30 L46,53 L51.5,47.5 L55.5,57 L59.5,55.3 L55.5,46 L63,46 Z" />
+          </vector>
           EOF_FILE
           mkdir -p app/src/main/java/com/example/taskbarhover
           cat > app/src/main/java/com/example/taskbarhover/HoverService.kt <<'EOF_FILE'
@@ -345,3 +390,13 @@ jobs:
         with:
           name: TaskbarHover-apk
           path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk TaskbarHover.apk
+          gh release create "v1.0.${{ github.run_number }}" TaskbarHover.apk \
+            --title "Taskbar Hover v1.0.${{ github.run_number }}" \
+            --notes "Signed release APK. Download TaskbarHover.apk below." \
+            --target "${{ github.sha }}"
